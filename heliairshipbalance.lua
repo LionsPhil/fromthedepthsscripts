@@ -138,15 +138,27 @@ function BalanceLiftSpinners(I)
   -- as the vehicle is still physically capable of doing so.
   if highest_altitude - lowest_altitude > maximum_acceptable_delta then
     -- Use the mean to judge how we're perfoming against the target, since this
-    -- works even if the spinners are far away from the vehicle CoM. This works
-    -- if we just target the mean, but we'll catch up faster if we keep our
-    -- target at the extreme extent.
+    -- works even if the spinners are far away from the vehicle CoM. We'll catch
+    -- up faster if we keep out target at the extreme extent, but for seriously
+    -- weird designs with tight constraints (range of spinner offsets greater
+    -- than the acceptable delta), we can get tangled in an endless climb or
+    -- descent. Detect that and fallback to the mean to just stabilize.
     if effective_target_altitude > mean_altitude then
       -- Trying to ascend; clamp at the top end
-      effective_target_altitude =  lowest_altitude + maximum_acceptable_delta
+      local new_target_altitude =  lowest_altitude + maximum_acceptable_delta
+      if new_target_altitude > effective_target_altitude then
+        effective_target_altitude = new_target_altitude
+      else
+        effective_target_altitude = mean_altitude
+      end
     else
       -- Trying to descend; clamp at the bottom end
-      effective_target_altitude = highest_altitude - maximum_acceptable_delta
+      local new_target_altitude = highest_altitude - maximum_acceptable_delta
+      if new_target_altitude < effective_target_altitude then
+        effective_target_altitude = new_target_altitude
+      else
+        effective_target_altitude = mean_altitude
+      end
     end
   end
 
