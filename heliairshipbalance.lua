@@ -53,15 +53,24 @@ function LocateLiftSpinners(I)
   for spinner = 0, spinners - 1 do
     if I:IsSpinnerDedicatedHelispinner(spinner) then
       local spinner_info = I:GetSpinnerInfo(spinner)
-      if math.abs(spinner_info.LocalForwards.x) < 0.1 and
-         math.abs(spinner_info.LocalForwards.y) < 0.1 and
-         math.abs(spinner_info.LocalForwards.z) > 0.9 then
+      -- Local up vector will be + or - Y, but we can't get that.
+      -- So use that this means the local forward will be + or - X or Z.
+      -- Since this is a unit vector locked to an axis, Y will therefore be
+      -- (almost, due to rotation imprecisions) Y.
+      if math.abs(spinner_info.LocalForwards.y) < 0.1 then
+        -- Downward-facing detection is a little awkward because of quaternions.
+        -- This will work if you built your helispinner by just fipping it
+        -- around one axis, but may get confused if they were also twisted.
+        -- It'll do given non-Always Up is already pretty broken.
+        local downwards =
+          (spinner_info.LocalRotation.x > 0.9) or
+          (spinner_info.LocalRotation.z > 0.9)
 
-      table.insert(new_spinners, {
-        index     = spinner,
-        offset    = spinner_info.LocalPositionRelativeToCom.y,
-        downwards = (spinner_info.LocalForwards.z > 0.0)
-      })
+        table.insert(new_spinners, {
+          index     = spinner,
+          offset    = spinner_info.LocalPositionRelativeToCom.y,
+          downwards = downwards
+        })
       end
     end
   end
