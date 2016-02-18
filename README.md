@@ -1,8 +1,9 @@
 # From the Depths scripts
 Lua scripts for custom behaviours in the game [From the Depths](http://fromthedepthsgame.com/).
 
-## Scripts
-### [Heli-Airship Balance](https://github.com/LionsPhil/fromthedepthsscripts/blob/master/heliairshipbalance.lua)
+## [Heli-Airship Balance](https://github.com/LionsPhil/fromthedepthsscripts/blob/master/heliairshipbalance.lua)
+**[Demonstration video](https://www.youtube.com/watch?v=goeyjXUf5Gs)**
+
 Takes control of vertically-mounted dedicated heliblade spinners on your vessel to balance it out at a target altitude, with dynamic adjustments for terrain and enemies. Self-configuring, although there are some tunables at the top. (The most interesting is the default `target_altitude` it will maintain.)
 
 1. Build your vessel with some dedicated heliblade spinners facing either up or down (so they spin on a horizontal plane). Put them wherever you want so long as it's physically possible to balance the craft using them.
