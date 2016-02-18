@@ -12,3 +12,6 @@ Takes control of vertically-mounted dedicated heliblade spinners on your vessel 
 4. Provided your vessel has enough lift capacity in the right places, your vessel should hover in the sky in a controlled fashion.
 
 Does not do anything about lateral movement, by design. Fit thrusters, or ACB-controlled propellers, and an Aerial AI card, and you should have a heliairship that still understands waypoints and stock combat AI. Or fit another LUA block which handles navigation.
+
+## WIP [Missile Controller](https://github.com/LionsPhil/fromthedepthsscripts/blob/master/missile.lua)
+Missile controller for Lua transciever missiles. Attempts to make good target selection decisions, and includes a missile measurement mode to discover the performance metrics it needs for tunables. Currently lacking target prediction and has some untested horribleness from trying to cope with the existence of torpedoes.
