@@ -31,7 +31,8 @@ speed_estimate           = 115
 prox_abort               = 3
 -- Air missiles will avoid going below this height until they are close enough
 -- that they have to turn into their target (not strictly skimming, since they
--- won't make effort to dive to it either) (meters)
+-- won't make effort to dive to it either). High values will currently make
+-- missiles likely to abort and retarget due to being off-course. (meters)
 sea_skim_height          = 2
 -- If no target and younger than this, climb; otherwise cruise (seconds)
 -- Setting this too high can cause missiles to swerve away if they are about
@@ -134,6 +135,10 @@ end
 tick_counter = 0
 interval_period = target_scan_interval * steer_interval
 targets = {} -- returns of GetTargetInfo(); see ScanForTargets
+
+-- TODO cache for AngleToTarget, TimeToTarget for given missile and target ID
+-- TODO cache for missile/target assignments, allows for target_assign_interval
+-- TODO sticky targetting behaviour using cache, only recalcs if can't hit
 
 -- Returns angle in radians between missile facing and direction to target
 function AngleToTarget(
@@ -327,15 +332,15 @@ function SteerMissile(I, transciever, missile, missile_info)
 
     -- TODO use target and own Velocity to aim at intercept point
 
-    -- If our target is underwater, stay dry and fast until the last
+    -- If our target is under the skim height, stay dry and fast until the last
     -- moment.
-    if not is_torpedo and aim_at.y < 0 then
+    if not is_torpedo and aim_at.y < sea_skim_height then
       local angle_to_target = AngleToTarget(
         I, missile_info, target, target_in_missile_coords)
-      local time_to_turn = TimeToTarget(
+      local time_to_target = TimeToTarget(
         I, missile_info, target, target_in_missile_coords)
-        * 0.5 -- get ready early so we don't abort
-      if angle_to_target < turn_rate * time_to_turn then
+      local fudge = 2.0 -- get ready early so we don't abort
+      if angle_to_target * fudge > turn_rate * time_to_target then
         -- Can still make the turn later
         aim_at.y = sea_skim_height
         if dbg_spam then I:Log(
