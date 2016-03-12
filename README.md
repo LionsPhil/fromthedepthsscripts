@@ -14,4 +14,14 @@ Takes control of vertically-mounted dedicated heliblade spinners on your vessel 
 Does not do anything about lateral movement, by design. Fit thrusters, or ACB-controlled propellers, and an Aerial AI card, and you should have a heliairship that still understands waypoints and stock combat AI. Or fit another LUA block which handles navigation.
 
 ## WIP [Missile Controller](https://github.com/LionsPhil/fromthedepthsscripts/blob/master/missile.lua)
-Missile controller for Lua transciever missiles. Attempts to make good target selection decisions, and includes a missile measurement mode to discover the performance metrics it needs for tunables. Currently lacking target prediction and has some untested horribleness from trying to cope with the existence of torpedoes.
+Missile controller for Lua transciever missiles. Attempts to make good target selection decisions, and includes a missile measurement mode to discover the performance metrics it needs for tunables. Currently lacking target prediction, but the target *selection* is pretty advanced.
+
+- "Measurement mode" to performance-test a missile and find the tuning values the code needs for you
+- Sophisticated target prioritization, considering player orders, air/water domain, range, turning circle, stock combat AI priorities, and salvage status
+- Optional sticky targeting (missiles only retarget if their current target becomes unreachable, is destroyed, etc.)
+- Near-miss overshoot proximity triggering (try to turn misses into splash hits; will still wait for impact if on-target)
+- Hydrophobia for air missiles; avoids dipping into the sea until the last moment for targets underwater, and gets out of it otherwise
+- Climb/cruise mode for target-spotting when nothing is reachable
+- Fairly aggressive at limiting and spreading computational load, at least so long as you stagger your huge volleys ;)
+
+In theory supports torpedoes, but I haven't tested with them.
