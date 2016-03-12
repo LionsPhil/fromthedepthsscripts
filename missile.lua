@@ -397,10 +397,11 @@ function TargetMissile(I, transciever, missile, missile_info)
       end
     end
 
-    -- Set the best target for this misile
+    -- Set the best target for this missile
     if profile_spam then profile_decisions = profile_decisions + 1 end
-    local best_target = BestTargetForMissile(I, missile_info, targets)
-    targetting_decision.target_id = best_target.Id
+    local best_target_id = BestTargetForMissile(I, missile_info, targets)
+    if best_target_id ~= nil then best_target_id = best_target_id.Id end
+    targetting_decision.target_id = best_target_id
   end
 end
 
