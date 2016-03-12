@@ -5,12 +5,8 @@ Copyright 2016 Philip Boulain. Licensed under the ISC License.
 Shortcomings:
   - Want a way to restrict this to affect just a single weapon group, then you
     can have one per missile type (torpedoes in particular need it).
-  - Missiles are not sticky, although target-switching is discouraged by their
-    estimation of if they can reach an alternative. Can perform some pretty
-    vexing swerve-to-misses if priorities are unstable.
   - Doesn't try to avoid overkill.
   - Prediction is nowhere near as smart as Blothorn's (...currently none).
-  - Pretty CPU-intensive, does a lot of recomputation every update.
 ]]--
 
 -- Tunables --------------------------------------------------------------------
@@ -39,6 +35,10 @@ sea_skim_height          = 2
 -- to slam down on a ship when the targetted block changes beyond their ability
 -- to turn.
 max_climb_age            = 1
+-- If true, a missile will only switch to another target if it determines its
+-- current one is no longer valid (becomes unreachable, is destroyed, etc.).
+-- Otherwise they may break off to go for opportune targets en-route.
+sticky_targetting        = true
 -- Angle beyond which all targets are considered equally off-course. Wider thus
 -- means the targetting decision will be dominated by where the missile is
 -- already facing, even if it's an otherwise inferior target. Too narrow will
@@ -75,11 +75,13 @@ dbg_spam                 = false
 profile_spam             = false
 -- Spam the HUD when we do something cool
 hud_spam                 = true
--- Update intervals. Lower is more frequent, 40 is once per second. Setting
--- these too high will hurt missile responsiveness. Some work is always done
+-- Update intervals. Lower is more frequent (better guidance), higher may save
+-- you some CPU time if your machine is struggling. Some work is always done
 -- per-tick.
--- How often to steer the missiles. At present this also controls how often
--- they reconsider targets.
+-- How often a missile should re-evaluate its target, in seconds. This is done
+-- from the target's own lifespan counter so they don't all recalculate at once.
+target_assign_interval   = 0.2
+-- How often to steer the missiles, in ticks (40 = one second).
 steer_interval           = 1
 
 -- Measurement mode (mostly self-contained) ------------------------------------
@@ -139,10 +141,13 @@ end
 -- Regular behaviour -----------------------------------------------------------
 tick_counter = 0
 interval_period = steer_interval
-targets = {} -- returns of GetTargetInfo(); see ScanForTargets
+targets = {} -- returns of GetTargetInfo(); gets resorted(!)
 
--- TODO cache for missile/target assignments, allows for target_assign_interval
--- TODO sticky targetting behaviour using cache, only recalcs if can't hit
+-- Targetting decisions; map from missile ID to a table with:
+--   target_id   - id of target
+--   last_update - time target was last considered by missile clock
+targetting_decisions = {}
+profile_decisions    = 0
 
 -- *ToTarget caches; tables of missile IDs mapping to tables of target IDs
 -- mapping to the result (see the *ToTarget functions)
@@ -154,7 +159,6 @@ profile_cache_hits    = 0
 function ClearCalculationCaches(I)
   cache_angle_to_target = {}
   cache_time_to_target  = {}
-  profile_cache_hits    = 0
 end
 
 -- Returns angle in radians between missile facing and direction to target.
@@ -264,6 +268,7 @@ function MissileCanHit(I, missile_info, target)
   end
 
   -- Is it within our turning circle? (Can we turn X degrees in Y distance?)
+  -- TODO TimeToTarget calculating turning time now works against this
   local angle_to_target = AngleToTarget(
     I, missile_info, target, target_in_missile_coords)
   local time_to_target  = TimeToTarget(
@@ -357,11 +362,59 @@ function ScanForTargets(I)
   end
 end
 
+-- (Possibly) choose a target for the missile. Returns nothing (but updates the
+-- targetting decision for it).
+function TargetMissile(I, transciever, missile, missile_info)
+  -- Find/initialize the targetting decision for this missile
+  local targetting_decision = targetting_decisions[missile_info.Id]
+  if targetting_decision == nil then
+    targetting_decision = {
+      target_id = nil,
+      last_update = -target_assign_interval
+    }
+    targetting_decisions[missile_info.Id] = targetting_decision
+  end
+
+  -- Is it time to reassess its target?
+  if missile_info.TimeSinceLaunch >=
+    targetting_decision.last_update + target_assign_interval then
+
+    targetting_decision.last_update = missile_info.TimeSinceLaunch
+
+    -- Do we already have a valid target?
+    if sticky_targetting then
+      local current_target = nil
+      for ignore, target in ipairs(targets) do
+        if target.Id == targetting_decision.target_id then
+          current_target = target
+        end
+      end
+      if current_target ~= nil
+        and MissileCanHit(I, missile_info, current_target) then
+
+        -- Stick to this target
+        return
+      end
+    end
+
+    -- Set the best target for this misile
+    if profile_spam then profile_decisions = profile_decisions + 1 end
+    local best_target = BestTargetForMissile(I, missile_info, targets)
+    targetting_decision.target_id = best_target.Id
+  end
+end
+
 -- Steer the given missile toward its target
--- (and, currently, pick that target for it)
 function SteerMissile(I, transciever, missile, missile_info)
-  local best_target = BestTargetForMissile(
-    I, missile_info, targets)
+  -- Get the target we've been assigned; we should always have a decision
+  local best_target = nil
+  local targetting_decision = targetting_decisions[missile_info.Id]
+  -- This is not wonderously efficient, but the list should always be small
+  for ignore, target in ipairs(targets) do
+    if target.Id == targetting_decision.target_id then
+      best_target = target
+    end
+  end
 
   if best_target == nil then
     -- Nothing we can hit!
@@ -450,6 +503,7 @@ function Update(I)
 
   -- Do something with each missile
   local already_measuring = false
+  local missile_id_seen = {}
   local transciever_count = I:GetLuaTransceiverCount()
   for transciever = 0, transciever_count-1 do
     local missiles = I:GetLuaControlledMissileCount(transciever)
@@ -471,6 +525,8 @@ function Update(I)
         end
       else
         -- Normal guidance
+        missile_id_seen[missile_info.Id] = true
+        TargetMissile(I, transciever, missile, missile_info)
         if tick_counter % steer_interval == 0 then
           SteerMissile(I, transciever, missile, missile_info)
         end
@@ -478,7 +534,19 @@ function Update(I)
     end
   end
 
+  -- Clean up targetting decisions for missiles that no longer exist
+  for missile_id, ignore in ipairs(targetting_decisions) do
+    if missile_id_seen[missile_id] == nil then
+      targetting_decisions[missile_id] = nil
+    end
+  end
+
+  -- Profiling noise
   if profile_spam then
-    I:LogToHud(profile_cache_hits .. " cache hits")
+    I:LogToHud(
+      profile_decisions .. " decisions; " ..
+      profile_cache_hits .. " cache hits")
+    profile_decisions = 0
+    profile_cache_hits = 0
   end
 end
