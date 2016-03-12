@@ -71,6 +71,8 @@ measurement_mode_timeout = 10
 -- problems.
 -- Spam the Lua block log with de-bugging messages
 dbg_spam                 = false
+-- Spam the Lua block log with profiling messages
+profile_spam             = true
 -- Spam the HUD when we do something cool
 hud_spam                 = true
 -- Update intervals. Lower is more frequent, 40 is once per second. Setting
@@ -146,11 +148,13 @@ targets = {} -- returns of GetTargetInfo(); see ScanForTargets
 -- mapping to the result (see the *ToTarget functions)
 cache_angle_to_target = {}
 cache_time_to_target  = {}
+profile_cache_hits    = 0
 
 -- Invalidate the *ToTarget calculation caches
 function ClearCalculationCaches(I)
   cache_angle_to_target = {}
   cache_time_to_target  = {}
+  profile_cache_hits    = 0
 end
 
 -- Returns angle in radians between missile facing and direction to target.
@@ -165,7 +169,10 @@ function AngleToTarget(
     cache_angle_to_target[missile_info.Id] = cache_for_missile
   else
     local cache_result = cache_for_missile[target.Id]
-    if cache_result ~= nil then return cache_result end
+    if cache_result ~= nil then
+      if profile_spam then profile_cache_hits = profile_cache_hits + 1 end
+      return cache_result
+    end
   end
 
   -- Calculate
@@ -195,7 +202,10 @@ function TimeToTarget(
     cache_time_to_target[missile_info.Id] = cache_for_missile
   else
     local cache_result = cache_for_missile[target.Id]
-    if cache_result ~= nil then return cache_result end
+    if cache_result ~= nil then
+      if profile_spam then profile_cache_hits = profile_cache_hits + 1 end
+      return cache_result
+    end
   end
 
   -- Calculate
@@ -453,5 +463,9 @@ function Update(I)
         end
       end
     end
+  end
+
+  if profile_spam then
+    I:LogToHud(profile_cache_hits .. " cache hits")
   end
 end
