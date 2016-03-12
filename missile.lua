@@ -17,7 +17,7 @@ Shortcomings:
 -- Are the missiles torpedos? Will try to stay above/below sea as needed.
 is_torpedo               = false
 -- Distance beyond which won't even *try* to persue targets (meters)
-maximum_range            = 1000
+maximum_range            = 900
 -- Rate at which missile can turn (radians/second; use measurement mode!)
 turn_rate                = 0.54
 -- Estimated speed the missile will spend most of its lifespan at (m/s)
@@ -46,6 +46,12 @@ off_course_clamp         = math.rad(45)
 dbg_spam                 = false
 -- Spam the HUD when we do something cool
 hud_spam                 = true
+-- How often to rescan for targets, in ticks. Lower is more frequent, 40 is
+-- once per second. Setting this too high will hurt retargetting responsiveness.
+target_scan_interval     = 10
+-- How often to steer the missiles, in ticks. At present this also controls
+-- how often they reconsider targets.
+steer_interval           = 1
 -- Measurement mode: DON'T TRACK TARGETS, just do some missile acrobatics and
 -- log values for the above to the Lua block. To use this, turn it on, fire
 -- ONLY ONE MISSILE (rip up some launchpads if you have to), wait for the HUD
@@ -63,6 +69,10 @@ measurement_mode_turn    = math.rad(90)
 -- Useful to clean up for subsequent retries.
 measurement_mode_timeout = 10
 --------------------------------------------------------------------------------
+
+tick_counter = 0
+interval_period = target_scan_interval * steer_interval
+targets = {}
 
 mm_start_vector = nil
 mm_complete     = false
@@ -248,9 +258,9 @@ function BestTargetForMissile(I, missile_info, targets)
   return nil
 end
 
-function Update(I)
+function ScanForTargets(I)
   -- Get some targets
-  local targets = {}
+  targets = {}
   local mainframe_count = I:GetNumberOfMainframes()
   for mainframe = 0, mainframe_count-1 do
     local target_count = I:GetNumberOfTargets(mainframe)
@@ -261,7 +271,9 @@ function Update(I)
         table.insert(targets, target_info) end
     end
   end
+end
 
+function SteerMissiles(I)
   -- Get and aim our missiles
   local already_measuring = false
   local transciever_count = I:GetLuaTransceiverCount()
@@ -351,5 +363,17 @@ function Update(I)
         end
       end
     end
+  end
+end
+
+function Update(I)
+  if measurement_mode then
+    -- For best measurements, we want tick-accurate control, but also don't
+    -- care about scanning for targets at all.
+    SteerMissiles(I)
+  else
+    if tick_counter % target_scan_interval == 0 then ScanForTargets(I) end
+    if tick_counter %       steer_interval == 0 then SteerMissiles(I) end
+    tick_counter = (tick_counter + 1) % interval_period
   end
 end
