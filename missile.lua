@@ -16,7 +16,7 @@ Shortcomings:
 -- Tunables --------------------------------------------------------------------
 -- Are the missiles torpedos? Will try to stay above/below sea as needed.
 is_torpedo               = false
--- Jump/dive depth for missiles, allowing them to cross-target
+-- Jump/dive depth for missiles, allowing them to cross-target (meters)
 sea_crossover_tolerance  = 10
 -- Distance beyond which won't even *try* to persue targets (meters)
 maximum_range            = 800
@@ -49,17 +49,6 @@ off_course_clamp         = math.rad(45)
 -- missiles trying to climb/cruise for a better target, but also stops them
 -- giving up if the AI retargets at the last moment.
 chase_unicorns           = true
--- Spam the Lua block log with de-bugging messages
-dbg_spam                 = false
--- Spam the HUD when we do something cool
-hud_spam                 = true
--- How often to rescan for targets, in ticks. Lower is more frequent, 40 is
--- once per second. Setting this too high will hurt retargetting responsiveness
--- since it will starve the controller of intel.
-target_scan_interval     = 1
--- How often to steer the missiles, in ticks. At present this also controls
--- how often they reconsider targets.
-steer_interval           = 1
 -- Measurement mode: DON'T TRACK TARGETS, just do some missile acrobatics and
 -- log values for the above to the Lua block. To use this, turn it on, fire
 -- ONLY ONE MISSILE (rip up some launchpads if you have to), wait for the HUD
@@ -76,6 +65,20 @@ measurement_mode_turn    = math.rad(90)
 -- How long a missile can try to make the turn before measurements give up.
 -- Useful to clean up for subsequent retries.
 measurement_mode_timeout = 10
+
+-- Really finnicky tunables ----------------------------------------------------
+-- You probably don't actually have to mess with these unless you're having
+-- problems.
+-- Spam the Lua block log with de-bugging messages
+dbg_spam                 = false
+-- Spam the HUD when we do something cool
+hud_spam                 = true
+-- Update intervals. Lower is more frequent, 40 is once per second. Setting
+-- these too high will hurt missile responsiveness. Some work is always done
+-- per-tick.
+-- How often to steer the missiles. At present this also controls how often
+-- they reconsider targets.
+steer_interval           = 1
 
 -- Measurement mode (mostly self-contained) ------------------------------------
 mm_start_vector = nil
@@ -133,31 +136,69 @@ end
 
 -- Regular behaviour -----------------------------------------------------------
 tick_counter = 0
-interval_period = target_scan_interval * steer_interval
+interval_period = steer_interval
 targets = {} -- returns of GetTargetInfo(); see ScanForTargets
 
--- TODO cache for AngleToTarget, TimeToTarget for given missile and target ID
 -- TODO cache for missile/target assignments, allows for target_assign_interval
 -- TODO sticky targetting behaviour using cache, only recalcs if can't hit
 
--- Returns angle in radians between missile facing and direction to target
+-- *ToTarget caches; tables of missile IDs mapping to tables of target IDs
+-- mapping to the result (see the *ToTarget functions)
+cache_angle_to_target = {}
+cache_time_to_target  = {}
+
+-- Invalidate the *ToTarget calculation caches
+function ClearCalculationCaches(I)
+  cache_angle_to_target = {}
+  cache_time_to_target  = {}
+end
+
+-- Returns angle in radians between missile facing and direction to target.
+-- target_in_missile_coords is optional, should you already have it.
 function AngleToTarget(
   I, missile_info, target, target_in_missile_coords)
 
+  -- Try/initialize the cache
+  local cache_for_missile = cache_angle_to_target[missile_info.Id]
+  if cache_for_missile == nil then
+    cache_for_missile = {}
+    cache_angle_to_target[missile_info.Id] = cache_for_missile
+  else
+    local cache_result = cache_for_missile[target.Id]
+    if cache_result ~= nil then return cache_result end
+  end
+
+  -- Calculate
   if target_in_missile_coords == nil then
     target_in_missile_coords = target.AimPointPosition - missile_info.Position
   end
-  return math.acos(Vector3.Dot(
+  local result = math.acos(Vector3.Dot(
     missile_info.Velocity.normalized,
     target_in_missile_coords.normalized))
+
+  -- Populate cache and return
+  cache_for_missile[target.Id] = result
+  return result
 end
 
--- Returns estimated time to target in seconds
+-- Returns estimated time to target in seconds.
 -- Currently very dumb and (mostly) ignores that both are moving, let alone
 -- accellerating.
+-- target_in_missile_coords is optional, should you already have it.
 function TimeToTarget(
   I, missile_info, target, target_in_missile_coords)
 
+  -- Try/initialize the cache
+  local cache_for_missile = cache_time_to_target[missile_info.Id]
+  if cache_for_missile == nil then
+    cache_for_missile = {}
+    cache_time_to_target[missile_info.Id] = cache_for_missile
+  else
+    local cache_result = cache_for_missile[target.Id]
+    if cache_result ~= nil then return cache_result end
+  end
+
+  -- Calculate
   if target_in_missile_coords == nil then
     target_in_missile_coords = target.AimPointPosition - missile_info.Position
   end
@@ -172,7 +213,6 @@ function TimeToTarget(
   local time_to_target = target_in_missile_coords.magnitude / missile_speed
 
   -- The more off-course we are, the longer we'll take
-  -- TODO Rework how *ToTarget functions are called to avoid recomputation here
   local angle_to_target = AngleToTarget(
     I, missile_info, target, target_in_missile_coords)
   -- Add the time needed to make the turn, factoring in time wasted travelling
@@ -183,6 +223,8 @@ function TimeToTarget(
     (angle_to_target / turn_rate) * (angle_to_target / math.pi)
   time_to_target = time_to_target + time_to_turn
 
+  -- Populate cache and return
+  cache_for_missile[target.Id] = time_to_target
   return time_to_target
 end
 
@@ -336,9 +378,9 @@ function SteerMissile(I, transciever, missile, missile_info)
     -- moment.
     if not is_torpedo and aim_at.y < sea_skim_height then
       local angle_to_target = AngleToTarget(
-        I, missile_info, target, target_in_missile_coords)
+        I, missile_info, best_target, target_in_missile_coords)
       local time_to_target = TimeToTarget(
-        I, missile_info, target, target_in_missile_coords)
+        I, missile_info, best_target, target_in_missile_coords)
       local fudge = 2.0 -- get ready early so we don't abort
       if angle_to_target * fudge > turn_rate * time_to_target then
         -- Can still make the turn later
@@ -374,9 +416,13 @@ end
 
 -- Update handler --------------------------------------------------------------
 function Update(I)
-  -- Measurement mode doesn't care about targets
+  -- Measurement mode doesn't care about targets or the cache
   if not measurement_mode then
-    if tick_counter % target_scan_interval == 0 then ScanForTargets(I) end
+    -- These are always per-tick because doing anything else with stale target
+    -- intel is a waste of time, and the cache is invalidated by missiles
+    -- moving.
+    ClearCalculationCaches(I)
+    ScanForTargets(I)
   end
 
   -- Do something with each missile
