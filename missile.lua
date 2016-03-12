@@ -16,8 +16,10 @@ Shortcomings:
 -- Tunables --------------------------------------------------------------------
 -- Are the missiles torpedos? Will try to stay above/below sea as needed.
 is_torpedo               = false
+-- Jump/dive depth for missiles, allowing them to cross-target
+sea_crossover_tolerance  = 10
 -- Distance beyond which won't even *try* to persue targets (meters)
-maximum_range            = 900
+maximum_range            = 800
 -- Rate at which missile can turn (radians/second; use measurement mode!)
 turn_rate                = 0.54
 -- Estimated speed the missile will spend most of its lifespan at (m/s)
@@ -42,13 +44,18 @@ max_climb_age            = 1
 -- instead make missiles very indecisive. (Radians; note that the *cone* of
 -- directional sensitive will be twice this, from side to side.)
 off_course_clamp         = math.rad(45)
+-- If there are no valid targets, try an invalid target. Basically disables
+-- missiles trying to climb/cruise for a better target, but also stops them
+-- giving up if the AI retargets at the last moment.
+chase_unicorns           = true
 -- Spam the Lua block log with de-bugging messages
 dbg_spam                 = false
 -- Spam the HUD when we do something cool
 hud_spam                 = true
 -- How often to rescan for targets, in ticks. Lower is more frequent, 40 is
--- once per second. Setting this too high will hurt retargetting responsiveness.
-target_scan_interval     = 10
+-- once per second. Setting this too high will hurt retargetting responsiveness
+-- since it will starve the controller of intel.
+target_scan_interval     = 1
 -- How often to steer the missiles, in ticks. At present this also controls
 -- how often they reconsider targets.
 steer_interval           = 1
@@ -68,12 +75,8 @@ measurement_mode_turn    = math.rad(90)
 -- How long a missile can try to make the turn before measurements give up.
 -- Useful to clean up for subsequent retries.
 measurement_mode_timeout = 10
---------------------------------------------------------------------------------
 
-tick_counter = 0
-interval_period = target_scan_interval * steer_interval
-targets = {}
-
+-- Measurement mode (mostly self-contained) ------------------------------------
 mm_start_vector = nil
 mm_complete     = false
 function MeasurementModeGuidance(I, transciever, missile, missile_info)
@@ -127,6 +130,11 @@ function MeasurementModeGuidance(I, transciever, missile, missile_info)
   end
 end
 
+-- Regular behaviour -----------------------------------------------------------
+tick_counter = 0
+interval_period = target_scan_interval * steer_interval
+targets = {} -- returns of GetTargetInfo(); see ScanForTargets
+
 -- Returns angle in radians between missile facing and direction to target
 function AngleToTarget(
   I, missile_info, target, target_in_missile_coords)
@@ -179,6 +187,16 @@ function MissileCanHit(I, missile_info, target)
     target.AimPointPosition - missile_info.Position
   local distance_to_target = target_in_missile_coords.magnitude
 
+  -- Don't appear to be able to get height over sea-level for a
+  -- missile_info, but sea is currently always the plane y == 0.
+  local target_height_over_sea = target.AimPointPosition.y
+
+  -- Is it in the wrong sphere of engagement (air/sea) for us?
+  if     is_torpedo and target_height_over_sea >  sea_crossover_tolerance then
+    return false end
+  if not is_torpedo and target_height_over_sea < -sea_crossover_tolerance then
+    return false end
+
   -- Is it beyond maximum engagement range?
   if distance_to_target > maximum_range then
     if dbg_spam then I:Log(string.format(
@@ -204,6 +222,8 @@ function MissileCanHit(I, missile_info, target)
   return true
 end
 
+-- Returns the best thing in targets that the missile can aim for, or nil if
+-- there are no valid targets.
 function BestTargetForMissile(I, missile_info, targets)
   -- Sort the targets by how desirable they are
   -- ("Lesser" here means better: comes early in the sort results)
@@ -254,10 +274,18 @@ function BestTargetForMissile(I, missile_info, targets)
     end
   end
 
+  -- Nothing valid to hit; aim for the best invalid one if allowed
+  if chase_unicorns then
+    for ignore, target in ipairs(targets) do
+      return target
+    end
+  end
+
   -- Nothing to hit :(
   return nil
 end
 
+-- Update the global targets cache
 function ScanForTargets(I)
   -- Get some targets
   targets = {}
@@ -266,15 +294,87 @@ function ScanForTargets(I)
     local target_count = I:GetNumberOfTargets(mainframe)
     for target = 0, target_count-1 do
       local target_info = I:GetTargetInfo(mainframe, target)
-      local target_position_info = I:GetTargetPositionInfo(mainframe, target)
-      if target_info.Valid and target_position_info.Valid then
+      if target_info.Valid then
         table.insert(targets, target_info) end
     end
   end
 end
 
-function SteerMissiles(I)
-  -- Get and aim our missiles
+-- Steer the given missile toward its target
+-- (and, currently, pick that target for it)
+function SteerMissile(I, transciever, missile, missile_info)
+  local best_target = BestTargetForMissile(
+    I, missile_info, targets)
+
+  if best_target == nil then
+    -- Nothing we can hit!
+    if not is_torpedo
+      and missile_info.TimeSinceLaunch < max_climb_age then
+
+      -- Gain altitude, make our turn easier
+      local climb = missile_info.Position
+      climb.y = climb.y + 1000000 -- will cruise toward this; make it high
+      I:SetLuaControlledMissileAimPoint(transciever, missile,
+        climb.x, climb.y, climb.z)
+    else
+      -- Just cruise along on our last course
+    end
+  else
+    -- We have a target!
+    local aim_at = best_target.AimPointPosition
+
+    local target_in_missile_coords = aim_at - missile_info.Position
+
+    -- TODO use target and own Velocity to aim at intercept point
+
+    -- If our target is underwater, stay dry and fast until the last
+    -- moment.
+    if not is_torpedo and aim_at.y < 0 then
+      local angle_to_target = AngleToTarget(
+        I, missile_info, target, target_in_missile_coords)
+      local time_to_turn = TimeToTarget(
+        I, missile_info, target, target_in_missile_coords)
+        * 0.5 -- get ready early so we don't abort
+      if angle_to_target < turn_rate * time_to_turn then
+        -- Can still make the turn later
+        aim_at.y = sea_skim_height
+        if dbg_spam then I:Log(
+          "Missile " .. missile_info.Id ..
+          " is sea-skimming before a dive") end
+      end
+    end
+
+    -- Aim the point we've decided on
+    I:SetLuaControlledMissileAimPoint(transciever, missile,
+      aim_at.x, aim_at.y, aim_at.z)
+
+    -- If close enough, work out if we've overshot
+    local distance_to_target = target_in_missile_coords.magnitude
+    if distance_to_target < prox_abort then
+      -- How close will we be half a second from now?
+      local future_target  =
+        aim_at                + (best_target.Velocity  * 0.5)
+      local future_missile =
+        missile_info.Position + (missile_info.Velocity * 0.5)
+      local future_distance = (future_target - future_missile).magnitude
+      if future_distance > distance_to_target then
+        if hud_spam then I:LogToHud(
+          "Missile " .. missile_info.Id .. " overshooting; detonating!")
+        end
+        I:DetonateLuaControlledMissile(transciever, missile)
+      end
+    end
+  end
+end
+
+-- Update handler --------------------------------------------------------------
+function Update(I)
+  -- Measurement mode doesn't care about targets
+  if not measurement_mode then
+    if tick_counter % target_scan_interval == 0 then ScanForTargets(I) end
+  end
+
+  -- Do something with each missile
   local already_measuring = false
   local transciever_count = I:GetLuaTransceiverCount()
   for transciever = 0, transciever_count-1 do
@@ -282,8 +382,9 @@ function SteerMissiles(I)
     for missile = 0, missiles-1 do
       local missile_info = I:GetLuaControlledMissileInfo(transciever, missile)
 
-      if measurement_mode then -- suspend normal behaviour
-
+      if measurement_mode then
+        -- For best measurements, we want tick-accurate control, so there's
+        -- no interval for this.
         if already_measuring then
           I:LogToHud(
             "TOO MANY ACTIVE MISSILES; MEASURMENTS INVALID; CLEANING UP!");
@@ -294,86 +395,12 @@ function SteerMissiles(I)
           MeasurementModeGuidance(I, transciever, missile, missile_info)
           already_measuring = true
         end
-
-      else -- not measurement mode
-
-        local best_target = BestTargetForMissile(
-          I, missile_info, targets)
-
-        if best_target == nil then
-          -- Nothing we can hit!
-          if not is_torpedo
-            and missile_info.TimeSinceLaunch < max_climb_age then
-
-            -- Gain altitude, make our turn easier
-            local climb = missile_info.Position
-            climb.y = climb.y + 1000000 -- will cruise toward this; make it high
-            I:SetLuaControlledMissileAimPoint(transciever, missile,
-              climb.x, climb.y, climb.z)
-          else
-            -- Just cruise along on our last course
-          end
-        else
-          -- We have a target!
-          local aim_at = best_target.AimPointPosition
-
-          local target_in_missile_coords = aim_at - missile_info.Position
-
-          -- TODO use target and own Velocity to aim at intercept point
-
-          -- Don't appear to be able to get height over sea-level for a
-          -- missile_info, but sea is currently always the plane y == 0.
-          -- If our target is underwater, stay dry and fast until the last
-          -- moment.
-          if not is_torpedo and aim_at.y < 0 then
-            local angle_to_target = AngleToTarget(
-              I, missile_info, target, target_in_missile_coords)
-            local time_to_turn = TimeToTarget(
-              I, missile_info, target, target_in_missile_coords)
-              * 0.5 -- get ready early so we don't abort
-            if angle_to_target < turn_rate * time_to_turn then
-              -- Can still make the turn later
-              aim_at.y = sea_skim_height
-              if dbg_spam then I:Log(
-                "Missile " .. missile_info.Id ..
-                " is sea-skimming before a dive") end
-            end
-          end
-
-          -- Aim the point we've decided on
-          I:SetLuaControlledMissileAimPoint(transciever, missile,
-            aim_at.x, aim_at.y, aim_at.z)
-
-          -- If close enough, work out if we've overshot
-          local distance_to_target = target_in_missile_coords.magnitude
-          if distance_to_target < prox_abort then
-            -- How close will we be half a second from now?
-            local future_target  =
-              aim_at                + (best_target.Velocity  * 0.5)
-            local future_missile =
-              missile_info.Position + (missile_info.Velocity * 0.5)
-            local future_distance = (future_target - future_missile).magnitude
-            if future_distance > distance_to_target then
-              if hud_spam then I:LogToHud(
-                "Missile " .. missile_info.Id .. " overshooting; detonating!")
-              end
-              I:DetonateLuaControlledMissile(transciever, missile)
-            end
-          end
+      else
+        -- Normal guidance
+        if tick_counter % steer_interval == 0 then
+          SteerMissile(I, transciever, missile, missile_info)
         end
       end
     end
-  end
-end
-
-function Update(I)
-  if measurement_mode then
-    -- For best measurements, we want tick-accurate control, but also don't
-    -- care about scanning for targets at all.
-    SteerMissiles(I)
-  else
-    if tick_counter % target_scan_interval == 0 then ScanForTargets(I) end
-    if tick_counter %       steer_interval == 0 then SteerMissiles(I) end
-    tick_counter = (tick_counter + 1) % interval_period
   end
 end
