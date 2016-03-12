@@ -4,10 +4,10 @@ Copyright 2016 Philip Boulain. Licensed under the ISC License.
 
 Shortcomings:
   - Want a way to restrict this to affect just a single weapon group, then you
-      can have one per missile type (torpedoes in particular need it).
+    can have one per missile type (torpedoes in particular need it).
   - Missiles are not sticky, although target-switching is discouraged by their
-      estimation of if they can reach an alternative. Can perform some pretty
-      vexing swerve-to-misses if priorities are unstable.
+    estimation of if they can reach an alternative. Can perform some pretty
+    vexing swerve-to-misses if priorities are unstable.
   - Doesn't try to avoid overkill.
   - Prediction is nowhere near as smart as Blothorn's (...currently none).
   - Pretty CPU-intensive, does a lot of recomputation every update.
@@ -71,8 +71,8 @@ measurement_mode_timeout = 10
 -- problems.
 -- Spam the Lua block log with de-bugging messages
 dbg_spam                 = false
--- Spam the Lua block log with profiling messages
-profile_spam             = true
+-- Spam the HUD with profiling messages
+profile_spam             = false
 -- Spam the HUD when we do something cool
 hud_spam                 = true
 -- Update intervals. Lower is more frequent, 40 is once per second. Setting
@@ -399,6 +399,19 @@ function SteerMissile(I, transciever, missile, missile_info)
           "Missile " .. missile_info.Id ..
           " is sea-skimming before a dive") end
       end
+    end
+
+    -- Are we an airborne missile that's taken a dunk (or been launched from
+    -- underwater without enough force to clear the surface yet?), and we're
+    -- not *trying* to hit something underwater? (Missiles without an intial
+    -- target should climb anyway; missiles that have lost their target are
+    -- probably better off coasting.)
+    if not is_torpedo
+      and missile_info.Position.y < -sea_crossover_tolerance
+      and aim_at.y > missile_info.Position.y then
+      -- Forget the target, get airborn before we burn out
+      aim_at = missile_info.Position
+      aim_at.y = aim_at.y + 1000000
     end
 
     -- Aim the point we've decided on
