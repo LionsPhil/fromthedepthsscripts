@@ -44,12 +44,14 @@ dbg_trace                = false
 tick_counter = 0
 lift_spinners = {} -- see LocateLiftSpinners for format
 interval_period = locate_interval * balance_interval
+last_spinner_count = 0 -- including unsuitable, for detecting damage
 
 -- Update lift_spinners with tables for each spinner, if changed
 function LocateLiftSpinners(I)
   local new_spinners = {}
 
   local spinners = I:GetSpinnerCount()
+  last_spinner_count = spinners
   for spinner = 0, spinners - 1 do
     if I:IsSpinnerDedicatedHelispinner(spinner) then
       local spinner_info = I:GetSpinnerInfo(spinner)
@@ -89,6 +91,12 @@ end
 
 function BalanceLiftSpinners(I)
   local effective_target_altitude = target_altitude
+
+  -- Avoid a crash if the number of spinners has changed, e.g. destroyed
+  if last_spinner_count ~= I:GetSpinnerCount() then
+    I:Log("Forcing spinner recount due to apparent damage")
+    LocateLiftSpinners(I)
+  end
 
   -- Scan for terrain under the spinners and boost altitude as necessary
   if minimum_ground_clearance > 0 then
