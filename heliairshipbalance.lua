@@ -95,6 +95,7 @@ function BalanceLiftSpinners(I)
   -- Avoid a crash if the number of spinners has changed, e.g. destroyed
   if last_spinner_count ~= I:GetSpinnerCount() then
     I:Log("Forcing spinner recount due to apparent damage")
+    lift_spinners = {}
     LocateLiftSpinners(I)
   end
 
