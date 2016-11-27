@@ -25,3 +25,5 @@ Missile controller for Lua transciever missiles. Attempts to make good target se
 - Fairly aggressive at limiting and spreading computational load, at least so long as you stagger your huge volleys ;)
 
 In theory supports torpedoes, but I haven't tested with them.
+
+**There is also a [Mk2 variant](https://github.com/LionsPhil/fromthedepthsscripts/blob/master/missile.lua) which uses variable thruster tricks to try to adjust the missile's performance dynamically instead.** I'm not really convinced which one is more combat-effective.
