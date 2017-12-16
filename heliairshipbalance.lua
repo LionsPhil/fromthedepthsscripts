@@ -49,24 +49,16 @@ last_spinner_count = 0 -- including unsuitable, for detecting damage
 -- Update lift_spinners with tables for each spinner, if changed
 function LocateLiftSpinners(I)
   local new_spinners = {}
+  local up = Vector3(0, 1, 0)
 
   local spinners = I:GetSpinnerCount()
   last_spinner_count = spinners
   for spinner = 0, spinners - 1 do
     if I:IsSpinnerDedicatedHelispinner(spinner) then
       local spinner_info = I:GetSpinnerInfo(spinner)
-      -- Local up vector will be + or - Y, but we can't get that.
-      -- So use that this means the local forward will be + or - X or Z.
-      -- Since this is a unit vector locked to an axis, Y will therefore be
-      -- (almost, due to rotation imprecisions) Y.
-      if math.abs(spinner_info.LocalForwards.y) < 0.1 then
-        -- Downward-facing detection is a little awkward because of quaternions.
-        -- This will work if you built your helispinner by just fipping it
-        -- around one axis, but may get confused if they were also twisted.
-        -- It'll do given non-Always Up is already pretty broken.
-        local downwards =
-          (spinner_info.LocalRotation.x > 0.9) or
-          (spinner_info.LocalRotation.z > 0.9)
+      local spinner_thrust = spinner_info.LocalRotation * up
+      if math.abs(spinner_thrust.y) > 0.5 then
+        local downwards = (spinner_thrust.y < 0)
 
         table.insert(new_spinners, {
           index     = spinner,
